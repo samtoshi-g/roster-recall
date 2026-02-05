@@ -42,6 +42,138 @@ function getFromCache(key: string): SearchResult[] | undefined {
 const PREFIX_MIN = 2;
 const PREFIX_MAX = 3;
 
+// Nickname -> full name mappings for first name matching
+const NICKNAMES: Record<string, string[]> = {
+  // Common nicknames
+  steph: ['stephen', 'stephanie'],
+  mike: ['michael', 'miguel'],
+  matt: ['matthew', 'matthias'],
+  tom: ['thomas', 'tommy'],
+  tommy: ['thomas'],
+  chris: ['christopher', 'christian', 'christina'],
+  dave: ['david'],
+  rob: ['robert', 'roberto'],
+  bob: ['robert'],
+  bobby: ['robert'],
+  jim: ['james', 'jimmy'],
+  jimmy: ['james'],
+  bill: ['william'],
+  billy: ['william'],
+  will: ['william'],
+  tony: ['anthony', 'antonio'],
+  alex: ['alexander', 'alexandra', 'alexis', 'alejandro'],
+  nick: ['nicholas', 'nicolas'],
+  dan: ['daniel', 'danny'],
+  danny: ['daniel'],
+  joe: ['joseph', 'jose'],
+  joey: ['joseph'],
+  ben: ['benjamin', 'benedict'],
+  sam: ['samuel', 'samantha'],
+  sammy: ['samuel'],
+  ed: ['edward', 'edwin', 'eduardo'],
+  eddie: ['edward', 'edwin'],
+  ted: ['theodore', 'edward'],
+  teddy: ['theodore'],
+  rick: ['richard', 'ricardo', 'eric', 'frederick'],
+  ricky: ['richard', 'ricardo'],
+  dick: ['richard'],
+  jack: ['john', 'jackson'],
+  johnny: ['john', 'jonathan'],
+  jon: ['jonathan', 'john'],
+  andy: ['andrew', 'anderson'],
+  drew: ['andrew'],
+  pete: ['peter'],
+  steve: ['steven', 'stephen'],
+  stevie: ['steven', 'stephen'],
+  greg: ['gregory'],
+  gregg: ['gregory'],
+  jeff: ['jeffrey', 'geoffrey'],
+  geoff: ['geoffrey', 'jeffrey'],
+  ken: ['kenneth', 'kendrick'],
+  kenny: ['kenneth'],
+  larry: ['lawrence', 'lamar'],
+  lenny: ['leonard'],
+  len: ['leonard'],
+  manny: ['manuel', 'emmanuel'],
+  freddy: ['frederick', 'alfredo'],
+  fred: ['frederick', 'alfred', 'alfredo'],
+  charlie: ['charles'],
+  chuck: ['charles'],
+  chas: ['charles'],
+  pat: ['patrick', 'patricia'],
+  paddy: ['patrick'],
+  patty: ['patricia', 'patrick'],
+  ray: ['raymond', 'ramon'],
+  ronnie: ['ronald', 'aaron'],
+  ron: ['ronald'],
+  reggie: ['reginald'],
+  frank: ['francis', 'franklin'],
+  frankie: ['francis', 'franklin'],
+  hank: ['henry', 'harold'],
+  harry: ['harold', 'henry', 'harrison'],
+  hal: ['harold', 'henry'],
+  wally: ['walter', 'wallace'],
+  walt: ['walter'],
+  vic: ['victor', 'vincent'],
+  vinnie: ['vincent'],
+  vinny: ['vincent'],
+  vin: ['vincent'],
+  artie: ['arthur'],
+  art: ['arthur'],
+  bernie: ['bernard'],
+  bern: ['bernard'],
+  gerry: ['gerald', 'gerard'],
+  jerry: ['gerald', 'jerome', 'jeremiah'],
+  marty: ['martin'],
+  matty: ['matthew'],
+  mikey: ['michael'],
+  nate: ['nathan', 'nathaniel'],
+  phil: ['phillip', 'philip'],
+  richie: ['richard'],
+  rudy: ['rudolph', 'rodolfo'],
+  terry: ['terrence', 'terence'],
+  theo: ['theodore'],
+  tim: ['timothy'],
+  timmy: ['timothy'],
+  trey: ['tremaine'],
+  ty: ['tyler', 'tyrone', 'tyson'],
+  zach: ['zachary', 'zachariah'],
+  zack: ['zachary'],
+};
+
+// Build reverse lookup: full name -> nicknames that map to it
+const FULL_TO_NICKNAMES: Record<string, string[]> = {};
+for (const [nick, fulls] of Object.entries(NICKNAMES)) {
+  for (const full of fulls) {
+    if (!FULL_TO_NICKNAMES[full]) {
+      FULL_TO_NICKNAMES[full] = [];
+    }
+    FULL_TO_NICKNAMES[full].push(nick);
+  }
+}
+
+// Check if query first name matches player first name
+// Matches if: prefix match OR nickname match
+function firstNameMatches(queryFirst: string, playerFirst: string): boolean {
+  // Direct prefix match (handles "pat" -> "patrick" naturally)
+  if (playerFirst.startsWith(queryFirst)) return true;
+  
+  // Check if query is a nickname that maps to the player's first name
+  const possibleFullNames = NICKNAMES[queryFirst];
+  if (possibleFullNames && possibleFullNames.some(full => playerFirst.startsWith(full))) {
+    return true;
+  }
+  
+  // Check if any nickname of the player's name matches the query as a prefix
+  // e.g., searching "ste" should match "Stephen" even though we also have "steph" -> "stephen"
+  const nicknamesForPlayer = FULL_TO_NICKNAMES[playerFirst];
+  if (nicknamesForPlayer && nicknamesForPlayer.some(nick => nick.startsWith(queryFirst))) {
+    return true;
+  }
+  
+  return false;
+}
+
 function addToIndex(index: PrefixIndex, key: string, player: PlayerData): void {
   const bucket = index.get(key);
   if (bucket) {
@@ -117,19 +249,42 @@ function searchLocal(query: string, league: string, limit: number): SearchResult
   const leagueUpper = league.toUpperCase();
   const wantsAllLeagues = league === 'all';
   
-  // Use first name as prefix key for index lookup
-  const prefixLength = queryFirstName.length >= PREFIX_MAX ? PREFIX_MAX : Math.max(queryFirstName.length, PREFIX_MIN);
-  const prefixKey = queryFirstName.slice(0, prefixLength);
-  const bucket = prefixIndex.get(prefixKey);
-
-  if (!bucket || bucket.length === 0) return [];
+  // Get all prefix keys to search (original + nickname expansions)
+  const prefixLength = Math.min(PREFIX_MAX, Math.max(queryFirstName.length, PREFIX_MIN));
+  const prefixKeys = new Set<string>();
+  
+  // Add direct prefix from query
+  prefixKeys.add(queryFirstName.slice(0, prefixLength));
+  
+  // Add prefixes from nickname expansions (e.g., "mike" -> also search "mic" from "michael")
+  const fullNameExpansions = NICKNAMES[queryFirstName];
+  if (fullNameExpansions) {
+    for (const fullName of fullNameExpansions) {
+      if (fullName.length >= prefixLength) {
+        prefixKeys.add(fullName.slice(0, prefixLength));
+      }
+    }
+  }
+  
+  // Collect players from all matching buckets
+  const candidatePlayers = new Set<PlayerData>();
+  for (const prefixKey of prefixKeys) {
+    const bucket = prefixIndex.get(prefixKey);
+    if (bucket) {
+      for (const player of bucket) {
+        candidatePlayers.add(player);
+      }
+    }
+  }
+  
+  if (candidatePlayers.size === 0) return [];
 
   const results: SearchResult[] = [];
 
   // Match players where:
-  // 1. Player's first name STARTS WITH query first name (prefix match - handles "pat" -> "patrick")
+  // 1. Player's first name matches query first name (prefix OR nickname match)
   // 2. Player's last name STARTS WITH query last name
-  for (const player of bucket) {
+  for (const player of candidatePlayers) {
     if (results.length >= limit) break;
     if (!wantsAllLeagues && player.league !== leagueUpper) continue;
     
@@ -140,8 +295,8 @@ function searchLocal(query: string, league: string, limit: number): SearchResult
     const playerFirstName = player.nameNormalized.slice(0, playerSpaceIndex);
     const playerLastName = player.nameNormalized.slice(playerSpaceIndex + 1);
     
-    // First name prefix match (pat -> patrick)
-    if (!playerFirstName.startsWith(queryFirstName)) continue;
+    // First name match (prefix OR nickname)
+    if (!firstNameMatches(queryFirstName, playerFirstName)) continue;
     
     // Last name prefix match
     if (!playerLastName.startsWith(queryLastName)) continue;

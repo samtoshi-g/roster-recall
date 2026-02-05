@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getPlayers } from '@/lib/players-data';
 
-// Use Node runtime for large JSON payload
-export const runtime = 'nodejs';
+// Force dynamic rendering
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const players = getPlayers();

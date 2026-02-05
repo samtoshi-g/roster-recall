@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPlayers } from '@/lib/players-data';
 
-export const runtime = 'edge';
+
 
 export async function POST(request: Request) {
   const body = await request.json();

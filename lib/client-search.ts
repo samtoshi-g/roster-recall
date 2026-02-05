@@ -236,19 +236,90 @@ function searchLocal(query: string, league: string, limit: number): SearchResult
   if (!playersData || !prefixIndex) return [];
 
   const normalized = normalizeQuery(query);
+  if (normalized.length < 2) return [];
   
-  // Require format: "firstname lastname" with at least 2 chars of last name
-  const spaceIndex = normalized.indexOf(' ');
-  if (spaceIndex === -1) return []; // No space = no results
-  
-  const queryFirstName = normalized.slice(0, spaceIndex);
-  const queryLastName = normalized.slice(spaceIndex + 1).trim();
-  
-  if (queryFirstName.length < 1 || queryLastName.length < 2) return []; // Need 2+ chars of last name
-
   const leagueUpper = league.toUpperCase();
   const wantsAllLeagues = league === 'all';
   
+  const spaceIndex = normalized.indexOf(' ');
+  const hasSpace = spaceIndex !== -1;
+  
+  // Single word search: match first OR last name prefix
+  if (!hasSpace) {
+    const queryTerm = normalized;
+    const results: SearchResult[] = [];
+    
+    // Get prefix keys to search (query + nickname expansions)
+    const prefixLength = Math.min(PREFIX_MAX, Math.max(queryTerm.length, PREFIX_MIN));
+    const prefixKeys = new Set<string>();
+    prefixKeys.add(queryTerm.slice(0, prefixLength));
+    
+    // Add nickname expansions
+    const fullNameExpansions = NICKNAMES[queryTerm];
+    if (fullNameExpansions) {
+      for (const fullName of fullNameExpansions) {
+        if (fullName.length >= prefixLength) {
+          prefixKeys.add(fullName.slice(0, prefixLength));
+        }
+      }
+    }
+    
+    // Collect candidates from prefix index
+    const candidatePlayers = new Set<PlayerData>();
+    for (const prefixKey of prefixKeys) {
+      const bucket = prefixIndex.get(prefixKey);
+      if (bucket) {
+        for (const player of bucket) {
+          candidatePlayers.add(player);
+        }
+      }
+    }
+    
+    // Also search by last name - scan all players for last name prefix match
+    for (const player of playersData!) {
+      const playerSpaceIndex = player.nameNormalized.indexOf(' ');
+      if (playerSpaceIndex === -1) continue;
+      const playerLastName = player.nameNormalized.slice(playerSpaceIndex + 1);
+      if (playerLastName.startsWith(queryTerm)) {
+        candidatePlayers.add(player);
+      }
+    }
+    
+    // Filter by first OR last name match
+    for (const player of candidatePlayers) {
+      if (results.length >= limit) break;
+      if (!wantsAllLeagues && player.league !== leagueUpper) continue;
+      
+      const playerSpaceIndex = player.nameNormalized.indexOf(' ');
+      if (playerSpaceIndex === -1) continue;
+      
+      const playerFirstName = player.nameNormalized.slice(0, playerSpaceIndex);
+      const playerLastName = player.nameNormalized.slice(playerSpaceIndex + 1);
+      
+      // Match if first name matches (prefix or nickname) OR last name starts with query
+      const firstMatches = firstNameMatches(queryTerm, playerFirstName);
+      const lastMatches = playerLastName.startsWith(queryTerm);
+      
+      if (!firstMatches && !lastMatches) continue;
+      
+      results.push({
+        id: player.id,
+        name: player.name,
+        team: player.team,
+        league: player.league,
+        position: player.position
+      });
+    }
+    
+    return results;
+  }
+  
+  // Two-word search: "firstname lastname" format
+  const queryFirstName = normalized.slice(0, spaceIndex);
+  const queryLastName = normalized.slice(spaceIndex + 1).trim();
+  
+  if (queryFirstName.length < 1 || queryLastName.length < 1) return [];
+
   // Get all prefix keys to search (original + nickname expansions)
   const prefixLength = Math.min(PREFIX_MAX, Math.max(queryFirstName.length, PREFIX_MIN));
   const prefixKeys = new Set<string>();

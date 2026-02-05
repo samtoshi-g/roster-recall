@@ -223,9 +223,9 @@ async function loadPlayersData(): Promise<void> {
   }
 
   loadPromise = (async () => {
-    const response = await fetch('/api/players-data');
+    const response = await fetch('/players.json');
     const data = await response.json();
-    playersData = data.players;
+    playersData = data;
     prefixIndex = buildPrefixIndex(playersData!);
   })();
 

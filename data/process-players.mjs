@@ -1,62 +1,47 @@
 import fs from 'fs';
+import { parse } from 'csv-parse/sync';
 
-// Process NBA players (FROM_YEAR >= 2000 OR TO_YEAR >= 2000)
+// Process NBA players
 const nbaRaw = fs.readFileSync('data/raw/nba_players.csv', 'utf-8');
-const nbaLines = nbaRaw.split('\n').slice(1);
-const nbaPlayers = nbaLines
-  .filter(line => line.trim())
-  .map(line => {
-    const cols = line.split(',');
-    const firstName = cols[3] || '';
-    const lastName = cols[2] || '';
-    const name = `${firstName} ${lastName}`.trim();
-    const team = `${cols[8] || ''} ${cols[9] || ''}`.trim();
-    const position = cols[12] || '';
-    const fromYear = parseInt(cols[25]) || 1900;
-    const toYear = parseInt(cols[26]) || 1900;
-    
-    // Include if they played any time 2000+
-    if (!name || (fromYear < 2000 && toYear < 2000)) return null;
-    
+const nbaRecords = parse(nbaRaw, { columns: true, skip_empty_lines: true });
+
+const nbaPlayers = nbaRecords
+  .filter(r => {
+    const fromYear = parseInt(r.FROM_YEAR) || 1900;
+    const toYear = parseInt(r.TO_YEAR) || 1900;
+    return (fromYear >= 2000 || toYear >= 2000) && r.PLAYER_FIRST_NAME && r.PLAYER_LAST_NAME;
+  })
+  .map(r => {
+    const name = `${r.PLAYER_FIRST_NAME} ${r.PLAYER_LAST_NAME}`.trim();
     return {
-      id: `nba_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${fromYear}`,
+      id: `nba_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${r.FROM_YEAR || 'unknown'}`,
       name,
       nameNormalized: name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
       league: 'NBA',
-      team,
-      position
+      team: `${r.TEAM_CITY || ''} ${r.TEAM_NAME || ''}`.trim() || null,
+      position: r.POSITION || null
     };
-  })
-  .filter(p => p && p.name.length > 2);
+  });
 
-// Process NFL players - use last_season >= 2000
-// display_name=1, position=17, last_season=27, latest_team=28
+// Process NFL players with proper CSV parsing
 const nflRaw = fs.readFileSync('data/raw/nfl_players.csv', 'utf-8');
-const nflLines = nflRaw.split('\n').slice(1);
-const nflPlayers = nflLines
-  .filter(line => line.trim())
-  .map(line => {
-    const cols = line.split(',');
-    const name = cols[1] || ''; // display_name
-    const position = cols[17] || ''; // position
-    const team = cols[28] || ''; // latest_team
-    const lastSeason = parseInt(cols[27]) || 0; // last_season
-    
-    // Include if they played through 2000+
-    if (!name || lastSeason < 2000) return null;
-    
-    return {
-      id: `nfl_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${lastSeason}`,
-      name,
-      nameNormalized: name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
-      league: 'NFL',
-      team,
-      position
-    };
-  })
-  .filter(p => p && p.name.length > 2);
+const nflRecords = parse(nflRaw, { columns: true, skip_empty_lines: true });
 
-// Dedupe by normalized name within league
+const nflPlayers = nflRecords
+  .filter(r => {
+    const lastSeason = parseInt(r.last_season) || 0;
+    return lastSeason >= 2000 && r.display_name;
+  })
+  .map(r => ({
+    id: `nfl_${r.display_name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${r.last_season || 'unknown'}`,
+    name: r.display_name,
+    nameNormalized: r.display_name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''),
+    league: 'NFL',
+    team: r.latest_team || null,
+    position: r.position || null
+  }));
+
+// Dedupe
 const dedupe = (players) => {
   const seen = new Set();
   return players.filter(p => {
@@ -67,16 +52,20 @@ const dedupe = (players) => {
   });
 };
 
-const deduped = {
-  nba: dedupe(nbaPlayers),
-  nfl: dedupe(nflPlayers)
-};
+console.log(`NBA: ${nbaPlayers.length} -> ${dedupe(nbaPlayers).length} unique`);
+console.log(`NFL: ${nflPlayers.length} -> ${dedupe(nflPlayers).length} unique`);
 
-console.log(`NBA: ${nbaPlayers.length} -> ${deduped.nba.length} unique (2000+)`);
-console.log(`NFL: ${nflPlayers.length} -> ${deduped.nfl.length} unique (2000+)`);
+// Load MLB and NHL we added manually 
+const existing = JSON.parse(fs.readFileSync('data/players.json', 'utf-8'));
+const mlbNhl = existing.filter(p => p.league === 'MLB' || p.league === 'NHL');
 
-const allPlayers = [...deduped.nba, ...deduped.nfl];
+const allPlayers = [...dedupe(nbaPlayers), ...dedupe(nflPlayers), ...mlbNhl];
+console.log(`MLB+NHL (kept): ${mlbNhl.length}`);
 console.log(`Total: ${allPlayers.length}`);
 
 fs.writeFileSync('data/players.json', JSON.stringify(allPlayers, null, 2));
-console.log('Saved to data/players.json');
+console.log('Saved!');
+
+// Sample check
+const sample = allPlayers.find(p => p.name === 'Patrick Mahomes');
+console.log('Sample (Mahomes):', sample);

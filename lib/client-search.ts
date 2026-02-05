@@ -223,7 +223,7 @@ async function loadPlayersData(): Promise<void> {
   }
 
   loadPromise = (async () => {
-    const response = await fetch('/players.json');
+    const response = await fetch('/data.json');
     const data = await response.json();
     playersData = data;
     prefixIndex = buildPrefixIndex(playersData!);

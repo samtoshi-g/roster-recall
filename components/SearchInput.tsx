@@ -120,10 +120,8 @@ export default function SearchInput({
           disabled={disabled}
           className="flex-1 bg-transparent text-lg font-semibold text-slate-100 placeholder:text-slate-500 focus:outline-none"
         />
-        {loading ? (
-          <span className="text-xs text-muted">Searching...</span>
-        ) : (
-          <span className="text-xs text-muted">{leagueFilter.toUpperCase()}</span>
+        {loading && (
+          <span className="text-xs text-muted">...</span>
         )}
       </div>
       {error ? <p className="mt-2 text-sm text-rose-300">{error}</p> : null}

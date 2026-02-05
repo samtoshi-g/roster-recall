@@ -285,8 +285,13 @@ function searchLocal(query: string, league: string, limit: number): SearchResult
       }
     }
     
+    // Sort candidates alphabetically before applying limit
+    const sortedCandidates = Array.from(candidatePlayers).sort((a, b) => 
+      a.name.localeCompare(b.name)
+    );
+    
     // Filter by first OR last name match
-    for (const player of candidatePlayers) {
+    for (const player of sortedCandidates) {
       if (results.length >= limit) break;
       if (!wantsAllLeagues && player.league !== leagueUpper) continue;
       

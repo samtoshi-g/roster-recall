@@ -13,6 +13,42 @@ export interface PlayerData {
 // Load players from bundled JSON
 const playersData: PlayerData[] = playersJson as PlayerData[];
 
+const PREFIX_MIN = 2;
+const PREFIX_MAX = 3;
+
+type PrefixIndex = Map<string, PlayerData[]>;
+
+function addToIndex(index: PrefixIndex, key: string, player: PlayerData): void {
+  const bucket = index.get(key);
+  if (bucket) {
+    bucket.push(player);
+  } else {
+    index.set(key, [player]);
+  }
+}
+
+function buildPrefixIndex(players: PlayerData[]): PrefixIndex {
+  const index: PrefixIndex = new Map();
+
+  for (const player of players) {
+    const normalized = player.nameNormalized;
+    if (normalized.length < PREFIX_MIN) continue;
+
+    addToIndex(index, normalized.slice(0, PREFIX_MIN), player);
+    if (normalized.length >= PREFIX_MAX) {
+      addToIndex(index, normalized.slice(0, PREFIX_MAX), player);
+    }
+  }
+
+  for (const bucket of index.values()) {
+    bucket.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  return index;
+}
+
+const prefixIndex = buildPrefixIndex(playersData);
+
 export function getPlayers(): PlayerData[] {
   return playersData;
 }
@@ -29,31 +65,48 @@ export function normalizeQuery(value: string): string {
 
 export function searchPlayersInMemory(query: string, league: string, limit = 8): SearchResult[] {
   const normalized = normalizeQuery(query);
-  if (normalized.length < 2) return [];
+  if (normalized.length < PREFIX_MIN) return [];
 
-  const players = getPlayers();
   const leagueUpper = league.toUpperCase();
-  
-  const matches = players
-    .filter(p => {
-      const matchesQuery = p.nameNormalized.includes(normalized);
-      const matchesLeague = league === 'all' || p.league === leagueUpper;
-      return matchesQuery && matchesLeague;
-    })
-    .sort((a, b) => {
-      // Prioritize prefix matches
-      const aStarts = a.nameNormalized.startsWith(normalized) ? 0 : 1;
-      const bStarts = b.nameNormalized.startsWith(normalized) ? 0 : 1;
-      if (aStarts !== bStarts) return aStarts - bStarts;
-      return a.name.localeCompare(b.name);
-    })
-    .slice(0, limit);
+  const wantsAllLeagues = league === 'all';
+  const prefixLength = normalized.length >= PREFIX_MAX ? PREFIX_MAX : PREFIX_MIN;
+  const prefixKey = normalized.slice(0, prefixLength);
+  const bucket = prefixIndex.get(prefixKey);
 
-  return matches.map(p => ({
-    id: p.id,
-    name: p.name,
-    team: p.team,
-    league: p.league,
-    position: p.position
-  }));
+  if (!bucket || bucket.length === 0) return [];
+
+  const results: SearchResult[] = [];
+
+  const pushResult = (player: PlayerData) => {
+    results.push({
+      id: player.id,
+      name: player.name,
+      team: player.team,
+      league: player.league,
+      position: player.position
+    });
+  };
+
+  // Pass 1: prefix matches in name order
+  for (const player of bucket) {
+    if (results.length >= limit) break;
+    if (!wantsAllLeagues && player.league !== leagueUpper) continue;
+    if (player.nameNormalized.startsWith(normalized)) {
+      pushResult(player);
+    }
+  }
+
+  // Pass 2: substring matches (excluding prefix matches), in name order
+  if (results.length < limit) {
+    for (const player of bucket) {
+      if (results.length >= limit) break;
+      if (!wantsAllLeagues && player.league !== leagueUpper) continue;
+      if (player.nameNormalized.startsWith(normalized)) continue;
+      if (player.nameNormalized.includes(normalized)) {
+        pushResult(player);
+      }
+    }
+  }
+
+  return results;
 }

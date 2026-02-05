@@ -104,49 +104,55 @@ function searchLocal(query: string, league: string, limit: number): SearchResult
   if (!playersData || !prefixIndex) return [];
 
   const normalized = normalizeQuery(query);
-  if (normalized.length < PREFIX_MIN) return [];
+  
+  // Require format: "firstname lastname" with at least 2 chars of last name
+  const spaceIndex = normalized.indexOf(' ');
+  if (spaceIndex === -1) return []; // No space = no results
+  
+  const queryFirstName = normalized.slice(0, spaceIndex);
+  const queryLastName = normalized.slice(spaceIndex + 1).trim();
+  
+  if (queryFirstName.length < 1 || queryLastName.length < 2) return []; // Need 2+ chars of last name
 
   const leagueUpper = league.toUpperCase();
   const wantsAllLeagues = league === 'all';
-  const prefixLength = normalized.length >= PREFIX_MAX ? PREFIX_MAX : PREFIX_MIN;
-  const prefixKey = normalized.slice(0, prefixLength);
+  
+  // Use first name as prefix key for index lookup
+  const prefixLength = queryFirstName.length >= PREFIX_MAX ? PREFIX_MAX : Math.max(queryFirstName.length, PREFIX_MIN);
+  const prefixKey = queryFirstName.slice(0, prefixLength);
   const bucket = prefixIndex.get(prefixKey);
 
   if (!bucket || bucket.length === 0) return [];
 
   const results: SearchResult[] = [];
 
-  // Pass 1: prefix matches (higher priority)
+  // Match players where:
+  // 1. Player's first name STARTS WITH query first name (prefix match - handles "pat" -> "patrick")
+  // 2. Player's last name STARTS WITH query last name
   for (const player of bucket) {
     if (results.length >= limit) break;
     if (!wantsAllLeagues && player.league !== leagueUpper) continue;
-    if (player.nameNormalized.startsWith(normalized)) {
-      results.push({
-        id: player.id,
-        name: player.name,
-        team: player.team,
-        league: player.league,
-        position: player.position
-      });
-    }
-  }
-
-  // Pass 2: substring matches
-  if (results.length < limit) {
-    for (const player of bucket) {
-      if (results.length >= limit) break;
-      if (!wantsAllLeagues && player.league !== leagueUpper) continue;
-      if (player.nameNormalized.startsWith(normalized)) continue;
-      if (player.nameNormalized.includes(normalized)) {
-        results.push({
-          id: player.id,
-          name: player.name,
-          team: player.team,
-          league: player.league,
-          position: player.position
-        });
-      }
-    }
+    
+    // Split player name into first and last
+    const playerSpaceIndex = player.nameNormalized.indexOf(' ');
+    if (playerSpaceIndex === -1) continue; // Skip players without last name
+    
+    const playerFirstName = player.nameNormalized.slice(0, playerSpaceIndex);
+    const playerLastName = player.nameNormalized.slice(playerSpaceIndex + 1);
+    
+    // First name prefix match (pat -> patrick)
+    if (!playerFirstName.startsWith(queryFirstName)) continue;
+    
+    // Last name prefix match
+    if (!playerLastName.startsWith(queryLastName)) continue;
+    
+    results.push({
+      id: player.id,
+      name: player.name,
+      team: player.team,
+      league: player.league,
+      position: player.position
+    });
   }
 
   return results;

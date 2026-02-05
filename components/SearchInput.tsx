@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import AutocompleteDropdown from './AutocompleteDropdown';
 import type { SearchResult } from '@/lib/players';
+import { search, preloadData, isDataLoaded } from '@/lib/client-search';
 
 interface SearchInputProps {
   onSelect: (player: SearchResult) => void;
@@ -25,6 +26,14 @@ export default function SearchInput({
   const [error, setError] = useState('');
   const [shake, setShake] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchIdRef = useRef(0);
+
+  // Preload player data on mount
+  useEffect(() => {
+    preloadData().catch(() => {
+      // Silently fail - will retry on first search
+    });
+  }, []);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -37,6 +46,32 @@ export default function SearchInput({
     return () => clearTimeout(timeout);
   }, [duplicateSignal]);
 
+  const performSearch = useCallback(async (searchQuery: string, searchId: number) => {
+    try {
+      // Show loading only if data not yet loaded
+      if (!isDataLoaded()) {
+        setLoading(true);
+      }
+      setError('');
+
+      const searchResults = await search(searchQuery, leagueFilter, 15);
+
+      // Ignore if a newer search was triggered
+      if (searchIdRef.current !== searchId) return;
+
+      setResults(searchResults);
+      setActiveIndex(0);
+      setOpen(searchResults.length > 0);
+    } catch {
+      if (searchIdRef.current !== searchId) return;
+      setError('Search error. Keep going!');
+    } finally {
+      if (searchIdRef.current === searchId) {
+        setLoading(false);
+      }
+    }
+  }, [leagueFilter]);
+
   useEffect(() => {
     if (disabled) return;
     if (query.trim().length < 2) {
@@ -45,36 +80,20 @@ export default function SearchInput({
       return;
     }
 
-    const controller = new AbortController();
-    const handle = setTimeout(async () => {
-      try {
-        setLoading(true);
-        setError('');
-        const params = new URLSearchParams({ q: query, league: leagueFilter });
-        const response = await fetch(`/api/search?${params.toString()}`, { signal: controller.signal });
-        if (!response.ok) {
-          throw new Error('Search failed');
-        }
-        const data = await response.json();
-        const nextResults = data.results || [];
-        setResults(nextResults);
-        setActiveIndex(0);
-        setOpen(nextResults.length > 0);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          return;
-        }
-        setError('Network hiccup. Keep going!');
-      } finally {
-        setLoading(false);
-      }
-    }, 250);
+    const searchId = ++searchIdRef.current;
+
+    // If data is loaded, search immediately for instant feedback
+    // Otherwise use debounce to avoid multiple data load attempts
+    const debounceMs = isDataLoaded() ? 0 : 150;
+
+    const handle = setTimeout(() => {
+      performSearch(query, searchId);
+    }, debounceMs);
 
     return () => {
-      controller.abort();
       clearTimeout(handle);
     };
-  }, [query, leagueFilter, disabled]);
+  }, [query, leagueFilter, disabled, performSearch]);
 
   const handleSelect = (player: SearchResult) => {
     onSelect(player);
@@ -84,7 +103,7 @@ export default function SearchInput({
     setActiveIndex(0);
   };
 
-  const visibleResults = useMemo(() => results.slice(0, 8), [results]);
+  const visibleResults = useMemo(() => results.slice(0, 15), [results]);
 
   return (
     <div className="relative w-full">

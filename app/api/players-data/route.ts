@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getPlayers } from '@/lib/players-data';
 
-export const runtime = 'edge';
+// Use Node runtime for large JSON payload
+export const runtime = 'nodejs';
 
 export async function GET() {
   const players = getPlayers();
